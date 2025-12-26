@@ -8,7 +8,7 @@ This guide walks you through deploying your Next.js client to Vercel and Express
 ### Client (Next.js)
 - **Framework**: Next.js 16.1.1 with React 19.2.3
 - **Current Port**: localhost:3000
-- **API Connection**: Hardcoded to `http://localhost:8080/api/home`
+- **API Connection**: Proxied through Next.js (`/api/*`) to the backend via `BACKEND_URL`
 
 ### Server (Express)
 - **Framework**: Express 5.2.1
@@ -28,14 +28,32 @@ This guide walks you through deploying your Next.js client to Vercel and Express
 Change the port configuration to use environment variables:
 
 ```javascript
+require("dotenv").config();
+
 const express = require("express");
 const app = express();
 const cors = require("cors");
 const PORT = process.env.PORT || 8080;
 
-app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000'
-}));
+const clientUrlEnv = process.env.CLIENT_URL;
+const allowedOrigins =
+  clientUrlEnv && clientUrlEnv !== "*"
+    ? clientUrlEnv
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : null;
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (!clientUrlEnv || clientUrlEnv === "*") return callback(null, true);
+      if (allowedOrigins?.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+  })
+);
 
 app.get('/api/home', (req, res) => {
     res.json({
@@ -138,7 +156,7 @@ git push -u origin main
 1. Go to your server service in Railway
 2. Click "Variables"
 3. Add:
-   - `CLIENT_URL` = `*` (temporary - will update after Vercel deployment)
+   - `CLIENT_URL` = `*` (temporary), or set it to a comma-separated allowlist of your Vercel URLs
    - `PORT` is automatically set by Railway
 
 #### 2.6 Get Your Railway URL
@@ -155,9 +173,9 @@ git push -u origin main
 
 #### 3.1 Update client/pages/index.tsx
 
-**Rationale:** Hardcoded localhost URLs won't work in production. Using `NEXT_PUBLIC_API_URL` allows the client to connect to different API servers in development versus production, enabling environment-specific configuration.
+**Rationale:** Direct browser calls from Vercel → Railway can hit CORS issues. Proxying `/api/*` through Next.js keeps requests same-origin in the browser and avoids CORS.
 
-Replace the hardcoded API URL with an environment variable:
+Update the client to call the proxied endpoint:
 
 ```typescript
 import React from 'react'
@@ -167,7 +185,7 @@ function index() {
   const [people, setPeople] = React.useState([]);
 
   React.useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/home`).then(
+    fetch(`/api/home`).then(
       response => response.json()
     ).then(
       data => {
@@ -194,12 +212,12 @@ export default index
 
 #### 3.2 Create client/.env.local
 
-**Rationale:** Provides local development values for environment variables. This file keeps your local development pointing to the local server while production uses the Railway URL, maintaining a smooth development workflow.
+**Rationale:** Next.js rewrites run on the server, so use a non-public `BACKEND_URL` for local development.
 
 Create a `.env.local` file in the `client/` directory:
 
 ```
-NEXT_PUBLIC_API_URL=http://localhost:8080
+BACKEND_URL=http://localhost:8080
 ```
 
 #### 3.3 Create client/.env.example
@@ -209,7 +227,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 Create a `.env.example` file as a template:
 
 ```
-NEXT_PUBLIC_API_URL=http://localhost:8080
+BACKEND_URL=http://localhost:8080
 ```
 
 #### 3.4 Update client/.gitignore
@@ -258,6 +276,7 @@ git push
 **Rationale:** Injects the Railway server URL into the client build, replacing the localhost API endpoint with the production backend. This connects the deployed frontend to the deployed backend.
 
 Before deploying, add environment variables:
+- `BACKEND_URL` = your Railway origin, e.g. `https://your-app.up.railway.app`
 
 1. In the project configuration, scroll to "Environment Variables"
 2. Add:
